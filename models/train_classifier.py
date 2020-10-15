@@ -1,0 +1,156 @@
+import sys
+import pandas as pd
+import nltk
+from sqlalchemy import create_engine
+from sklearn.pipeline import Pipeline, FeatureUnion
+from sklearn.feature_extraction.text import TfidfVectorizer
+from nltk.tokenize import word_tokenize
+from nltk.stem import WordNetLemmatizer
+import re
+from sklearn.multioutput import MultiOutputClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report
+from sklearn.model_selection import GridSearchCV
+import pickle
+
+def load_data(database_filepath):
+    '''
+    Load cleaned data from database
+    
+    INPUT:
+    database_filepath : Path to the database
+    OUTPUT:
+    df : dataframe from dataset for further processing
+    '''
+    engine = create_engine('sqlite:///{}'.format(database_filepath))
+    df = pd.read_sql_table('DisasterResponse',engine)
+    return df
+    
+
+def tokenize(text):
+    '''
+    Tokenizing text data for use with ML models
+    
+    INPUT:
+    text : the text to be tokenized
+    OUTPUT:
+    clean_tokens : the tokens for the said text
+    '''
+    url_regex = 'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+    detected_urls = re.findall(url_regex, text)
+    for url in detected_urls:
+        text = text.replace(url, "urlplaceholder")
+
+    tokens = word_tokenize(text)
+    lemmatizer = WordNetLemmatizer()
+
+    clean_tokens = []
+    for tok in tokens:
+        clean_tok = lemmatizer.lemmatize(tok).lower().strip()
+        clean_tokens.append(clean_tok)
+
+    return clean_tokens
+
+def build_model():
+    '''
+    ML model which takes in messages and classifies them on categories 
+    
+    INPUT:
+    none
+    OUTPUT:
+    cv : the ML model
+    '''
+    #set the feature variable X and target variable y
+    X =  df['message']
+    y = df.iloc[:,4:]
+    
+    #split data
+    X_train, X_test, y_train, y_test = train_test_split(X, y)
+    
+    #first pipeline
+    '''
+    pipeline_v1 = Pipeline([
+    ('tf_vect', TfidfVectorizer(tokenizer = tokenize, strip_accents= "unicode", stop_words="english" )),
+    ('clf', MultiOutputClassifier(RandomForestClassifier()))
+    ])
+    
+    # train data on first pipeline
+    pipeline_v1.fit(X_train, y_train)
+    '''
+    #Gridsearch
+    '''
+    parameters = {
+            #TFIDF Parameters 
+            'tf_vect__max_df': (0.8, 1.0),
+    
+            #Random Forest Parameters
+            'clf__estimator__n_estimators': [50, 100]
+            'clf__estimator__min_samples_split': [2, 4]
+            }
+
+    cv = GridSearchCV(pipeline_v1, param_grid=parameters, n_jobs=-1)
+    cv.fit(X_train, y_train)
+    '''
+    
+def evaluate_model(model, X_test, Y_test, category_names):
+    '''
+    Evaluate model performance using the precision, recall and f1 support metrics
+    
+    INPUT:
+    model:
+    X_test: messages from the test set
+    Y_test: categories from the test set
+    category_names: name of the categories
+    
+    OUTPUT:
+    none
+    '''
+    
+
+
+def save_model(model, model_filepath):
+    '''
+    Save model to a path
+    
+    INPUT:
+    model: model to be saved
+    model_filepath : Path for saving the model
+    
+    OUTPUT:
+    none
+    '''
+    pickle.dump(model, open(model_filepath, 'wb'))
+    
+
+
+def main():
+    if len(sys.argv) == 3:
+        database_filepath, model_filepath = sys.argv[1:]
+        print('Loading data...\n    DATABASE: {}'.format(database_filepath))
+        X, Y, category_names = load_data(database_filepath)
+        X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2)
+        
+        print('Building model...')
+        model = build_model()
+        
+        print('Training model...')
+        model.fit(X_train, Y_train)
+        
+        print('Evaluating model...')
+        evaluate_model(model, X_test, Y_test, category_names)
+
+        print('Saving model...\n    MODEL: {}'.format(model_filepath))
+        save_model(model, model_filepath)
+
+        print('Trained model saved!')
+
+    else:
+        print('Please provide the filepath of the disaster messages database '\
+              'as the first argument and the filepath of the pickle file to '\
+              'save the model to as the second argument. \n\nExample: python '\
+              'train_classifier.py ../data/DisasterResponse.db classifier.pkl')
+
+
+if __name__ == '__main__':
+    main()
