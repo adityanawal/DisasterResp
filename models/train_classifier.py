@@ -3,12 +3,12 @@ import pandas as pd
 import nltk
 from sqlalchemy import create_engine
 from sklearn.pipeline import Pipeline, FeatureUnion
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer, TfidfTransformer
 from nltk.tokenize import word_tokenize
 from nltk.stem import WordNetLemmatizer
 import re
 from sklearn.multioutput import MultiOutputClassifier
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 from sklearn.model_selection import GridSearchCV
@@ -21,11 +21,21 @@ def load_data(database_filepath):
     INPUT:
     database_filepath : Path to the database
     OUTPUT:
-    df : dataframe from dataset for further processing
+    X : The messages column / feature variable
+    y : The features columns / target variables
+    category_names: a list of the categories
     '''
     engine = create_engine('sqlite:///{}'.format(database_filepath))
     df = pd.read_sql_table('DisasterResponse',engine)
-    return df
+    
+    #set the feature variable X and target variable y
+    X =  df['message']
+    y = df.iloc[:,4:]
+    
+    #pull in the category names
+    category_names = y.columns
+    
+    return X, y, category_names
     
 
 def tokenize(text):
@@ -61,25 +71,27 @@ def build_model():
     OUTPUT:
     cv : the ML model
     '''
-    #set the feature variable X and target variable y
-    X =  df['message']
-    y = df.iloc[:,4:]
+
     
     #split data
-    X_train, X_test, y_train, y_test = train_test_split(X, y)
+    #X_train, X_test, y_train, y_test = train_test_split(X, y)
     
-    #first pipeline
+    #first pipeline - replaced with new version
     '''
     pipeline_v1 = Pipeline([
-    ('tf_vect', TfidfVectorizer(tokenizer = tokenize, strip_accents= "unicode", stop_words="english" )),
-    ('clf', MultiOutputClassifier(RandomForestClassifier()))
-    ])
+        ('tf_vect', TfidfVectorizer(tokenizer = tokenize)),
+        ('clf', MultiOutputClassifier(RandomForestClassifier()))
+        ])
     
     # train data on first pipeline
     pipeline_v1.fit(X_train, y_train)
-    '''
+    
+    #Fit and check prediction report
+    y_pred = pipeline_v1.predict(X_test)
+    print(classification_report(y_test, y_pred, target_names=y.columns.values))
+   
     #Gridsearch
-    '''
+    
     parameters = {
             #TFIDF Parameters 
             'tf_vect__max_df': (0.8, 1.0),
@@ -91,7 +103,47 @@ def build_model():
 
     cv = GridSearchCV(pipeline_v1, param_grid=parameters, n_jobs=-1)
     cv.fit(X_train, y_train)
+    y_pred = cv.predict(X_test)
+    print(classification_report(y_test, y_pred, target_names=y.columns.values))
     '''
+    
+    #Second pipeline (better performance)
+    pipeline_v2 = Pipeline([
+        ('features', FeatureUnion([
+            ('text_pipeline', Pipeline([
+                ('cvt', CountVectorizer(tokenizer=tokenize)),
+                ('tfidf', TfidfTransformer())
+            ]))
+        ])),
+        
+        ('clf', MultiOutputClassifier(AdaBoostClassifier()))
+    ])
+    
+    #pipeline_v2.fit(X_train, y_train)
+    #y_pred = pipeline_v2.predict(X_test)
+    #print(classification_report(y_test, y_pred, target_names=y.columns.values))
+    
+    #Gridsearch pipeline 2
+    parameters = {
+            #Text Pipeline - Countvectorizer Parameters 
+            #'features__text_pipeline__cvt__min_df': [1, 5],
+            
+            #Text Pipeline - Tfidf Parameters
+            'features__text_pipeline__tfidf__use_idf': (True, False),
+            
+            #Adaboost Forest Parameters
+            #'clf__estimator__min_samples_split': [2, 4]}
+            'clf__estimator__n_estimators': [50, 100]
+            }
+    
+    cv = GridSearchCV(pipeline_v2, param_grid=parameters, n_jobs=-1, verbose =5)
+    #cv.fit(X_train, y_train)
+    #y_pred = cv.predict(X_test)
+    #print(classification_report(y_test, y_pred, target_names=y.columns.values))     
+    
+    return cv
+    
+    
     
 def evaluate_model(model, X_test, Y_test, category_names):
     '''
@@ -106,8 +158,8 @@ def evaluate_model(model, X_test, Y_test, category_names):
     OUTPUT:
     none
     '''
-    
-
+    y_pred = model.predict(X_test)
+    print(classification_report(Y_test, y_pred, target_names=category_names))
 
 def save_model(model, model_filepath):
     '''
